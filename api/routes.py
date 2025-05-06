@@ -1,7 +1,7 @@
 import os
 import random
 import time
-from typing import List
+from typing import List, Dict
 from fastapi import APIRouter, HTTPException, Depends
 
 from .models import (
@@ -9,7 +9,10 @@ from .models import (
     TTSTaskResponse,
     TTSTaskStatusResponse,
     PromptsResponse,
-    HealthResponse
+    HealthResponse,
+    BatchTTSTaskRequest,
+    BatchTTSTaskResponse,
+    BatchTTSTaskStatusResponse
 )
 from .task_manager import TaskManager, TaskStatus
 
@@ -97,7 +100,72 @@ async def create_task(
     return {"task_id": task_id, "status": TaskStatus.PENDING}
 
 
-@router.get("/tasks/{task_id}", response_model=TTSTaskStatusResponse)
+@router.post("/batch_tasks", response_model=BatchTTSTaskResponse)
+async def create_batch_task(
+    request: BatchTTSTaskRequest,
+    task_manager: TaskManager = Depends(get_task_manager)
+):
+    """Create a new batch TTS task"""
+    # Get available prompts
+    prompts_dir = os.path.join(os.path.dirname(__file__), "..", "prompts")
+    prompts_dir = os.path.abspath(prompts_dir)
+    os.makedirs(prompts_dir, exist_ok=True)
+    available_prompts = [f for f in os.listdir(prompts_dir) if f.lower().endswith(".wav")]
+
+    if not available_prompts:
+        raise HTTPException(
+            status_code=400,
+            detail="No prompt audio files found in the 'prompts' directory."
+        )
+
+    # Use specified prompt or randomly select one
+    if request.prompt_path:
+        # Check if the specified prompt exists
+        if not os.path.exists(request.prompt_path):
+            # Check if it's just a filename without path
+            potential_path = os.path.join(prompts_dir, request.prompt_path)
+            if os.path.exists(potential_path):
+                prompt_path = potential_path
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Specified prompt '{request.prompt_path}' not found."
+                )
+        else:
+            prompt_path = request.prompt_path
+    else:
+        # Randomly select a prompt
+        selected_prompt_name = random.choice(available_prompts)
+        prompt_path = os.path.join(prompts_dir, selected_prompt_name)
+
+    # Ensure output directory exists
+    output_directory = request.output_directory
+    os.makedirs(output_directory, exist_ok=True)
+
+    # Validate that all filenames in speeches have .wav extension
+    invalid_filenames = [filename for filename in request.speeches.keys() if not filename.lower().endswith('.wav')]
+    if invalid_filenames:
+        raise HTTPException(
+            status_code=400,
+            detail=f"All filenames must end with .wav extension. Invalid filenames: {', '.join(invalid_filenames)}"
+        )
+
+    # Create the batch task
+    task_id = task_manager.create_batch_task(
+        speeches=request.speeches,
+        prompt_path=prompt_path,
+        output_directory=output_directory,
+        infer_mode=request.infer_mode
+    )
+
+    return {
+        "task_id": task_id, 
+        "status": TaskStatus.PENDING,
+        "total_files": len(request.speeches)
+    }
+
+
+@router.get("/tasks/{task_id}", response_model=None)
 async def get_task_status(
     task_id: str,
     task_manager: TaskManager = Depends(get_task_manager)
@@ -110,18 +178,38 @@ async def get_task_status(
             detail=f"Task with ID '{task_id}' not found"
         )
     
-    response = {
-        "task_id": task.task_id,
-        "status": task.status,
-        "output_path": task.output_path,
-    }
-    
-    # Add process_time if available
-    if task.process_time is not None:
-        response["process_time"] = task.process_time
-    
-    # Add error if task failed
-    if task.status == TaskStatus.FAILED and task.error:
-        response["error"] = task.error
-    
-    return response
+    # Check if it's a batch task or regular task
+    if hasattr(task, 'total_files'):  # It's a batch task
+        response = {
+            "task_id": task.task_id,
+            "status": task.status,
+            "output_directory": task.output_directory,
+            "total_files": task.total_files,
+            "processed_files": task.processed_files
+        }
+        
+        # Add process_time if available
+        if task.process_time is not None:
+            response["process_time"] = task.process_time
+        
+        # Add errors if any
+        if task.errors:
+            response["errors"] = task.errors
+        
+        return BatchTTSTaskStatusResponse(**response)
+    else:  # It's a regular task
+        response = {
+            "task_id": task.task_id,
+            "status": task.status,
+            "output_path": task.output_path,
+        }
+        
+        # Add process_time if available
+        if task.process_time is not None:
+            response["process_time"] = task.process_time
+        
+        # Add error if task failed
+        if task.status == TaskStatus.FAILED and task.error:
+            response["error"] = task.error
+        
+        return TTSTaskStatusResponse(**response)
