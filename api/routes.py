@@ -1,5 +1,6 @@
 import os
 import random
+import asyncio
 import time
 from typing import List, Dict, Optional
 from fastapi import APIRouter, HTTPException, Depends
@@ -22,6 +23,8 @@ router = APIRouter(prefix="/api/tts")
 
 # Global task manager instance that will be set by api_server.py
 _task_manager = None
+
+lock = asyncio.Lock()
 
 # Global for prompt index tracking
 PROMPT_INDEX_FILE = "prompt_last_index.txt"  # Stores the last used prompt index, relative to project root
@@ -115,58 +118,59 @@ async def create_task(
     request: TTSTaskRequest,
     task_manager: TaskManager = Depends(get_task_manager)
 ):
-    """Create a new TTS task"""
-    # Determine prompt path
-    prompt_path_to_use = None
-    # Define prompts_dir for validation if user provides a prompt_path
-    prompts_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "prompts"))
+    async with lock:
+        """Create a new TTS task"""
+        # Determine prompt path
+        prompt_path_to_use = None
+        # Define prompts_dir for validation if user provides a prompt_path
+        prompts_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "prompts"))
 
-    if request.prompt_path:
-        # User provided a specific prompt filename (relative to prompts directory)
-        potential_path = os.path.join(prompts_dir, request.prompt_path)
-        if os.path.isfile(potential_path) and potential_path.lower().endswith(('.wav', '.mp3')):
-            prompt_path_to_use = potential_path
-            logger.info(f"Using user-provided prompt: {prompt_path_to_use}")
-        else:
-            logger.warning(
-                f"User-provided prompt path '{request.prompt_path}' not found or invalid in '{prompts_dir}'. "
-                f"A prompt will be selected sequentially."
-            )
+        if request.prompt_path:
+            # User provided a specific prompt filename (relative to prompts directory)
+            potential_path = os.path.join(prompts_dir, request.prompt_path)
+            if os.path.isfile(potential_path) and potential_path.lower().endswith(('.wav', '.mp3')):
+                prompt_path_to_use = potential_path
+                logger.info(f"Using user-provided prompt: {prompt_path_to_use}")
+            else:
+                logger.warning(
+                    f"User-provided prompt path '{request.prompt_path}' not found or invalid in '{prompts_dir}'. "
+                    f"A prompt will be selected sequentially."
+                )
 
-    if not prompt_path_to_use:
-        # No valid user prompt provided, or none provided at all, select sequentially
-        prompt_path_to_use = get_next_sequential_prompt_path()
         if not prompt_path_to_use:
-            logger.error("No prompt audio files available for sequential selection, and none were provided or valid.")
-            raise HTTPException(
-                status_code=400, 
-                detail="No prompt audio files found in the 'prompts' directory, and none could be automatically selected."
-            )
-        logger.info(f"Sequentially selected prompt: {prompt_path_to_use}")
+            # No valid user prompt provided, or none provided at all, select sequentially
+            prompt_path_to_use = get_next_sequential_prompt_path()
+            if not prompt_path_to_use:
+                logger.error("No prompt audio files available for sequential selection, and none were provided or valid.")
+                raise HTTPException(
+                    status_code=400,
+                    detail="No prompt audio files found in the 'prompts' directory, and none could be automatically selected."
+                )
+            logger.info(f"Sequentially selected prompt: {prompt_path_to_use}")
 
-    # Get available prompts
-    prompts_dir = os.path.join(os.path.dirname(__file__), "..", "prompts")
-    prompts_dir = os.path.abspath(prompts_dir)
-    os.makedirs(prompts_dir, exist_ok=True)
+        # Get available prompts
+        prompts_dir = os.path.join(os.path.dirname(__file__), "..", "prompts")
+        prompts_dir = os.path.abspath(prompts_dir)
+        os.makedirs(prompts_dir, exist_ok=True)
 
-    # Generate a timestamp-based filename
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
-    generated_filename = f"{timestamp}.wav"
-    
-    # Use the requested output path directly without adding an output folder
-    output_dir = request.output_path
-    os.makedirs(output_dir, exist_ok=True)
-    final_output_path = os.path.join(output_dir, generated_filename)
+        # Generate a timestamp-based filename
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        generated_filename = f"{timestamp}.wav"
 
-    # Create the task
-    task_id = task_manager.create_task(
-        text=request.text,
-        prompt_path=prompt_path_to_use,
-        output_path=final_output_path,
-        infer_mode=request.infer_mode
-    )
+        # Use the requested output path directly without adding an output folder
+        output_dir = request.output_path
+        os.makedirs(output_dir, exist_ok=True)
+        final_output_path = os.path.join(output_dir, generated_filename)
 
-    return {"task_id": task_id, "status": TaskStatus.PENDING}
+        # Create the task
+        task_id = task_manager.create_task(
+            text=request.text,
+            prompt_path=prompt_path_to_use,
+            output_path=final_output_path,
+            infer_mode=request.infer_mode
+        )
+
+        return {"task_id": task_id, "status": TaskStatus.PENDING}
 
 
 @router.post("/batch_tasks", response_model=BatchTTSTaskResponse)
@@ -174,62 +178,61 @@ async def create_batch_task(
     request: BatchTTSTaskRequest,
     task_manager: TaskManager = Depends(get_task_manager)
 ):
-    """Create a new batch TTS task"""
-    logger.info(f"Received batch task creation request: {request}")
+    async with lock:
+        logger.info(f"Received batch task creation request: {request}")
+        # Determine the prompt path to be used for the entire batch
+        prompt_path_for_batch = None
+        prompts_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "prompts"))
+        os.makedirs(prompts_dir, exist_ok=True) # Ensure prompts directory exists for validation
 
-    # Determine the prompt path to be used for the entire batch
-    prompt_path_for_batch = None
-    prompts_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "prompts"))
-    os.makedirs(prompts_dir, exist_ok=True) # Ensure prompts directory exists for validation
+        if request.prompt_path:
+            # User provided a specific prompt filename (relative to prompts directory)
+            potential_path = os.path.join(prompts_dir, request.prompt_path)
+            if os.path.isfile(potential_path) and potential_path.lower().endswith(('.wav', '.mp3')):
+                prompt_path_for_batch = potential_path
+                logger.info(f"Using user-provided prompt for batch: {prompt_path_for_batch}")
+            else:
+                logger.warning(
+                    f"User-provided prompt path '{request.prompt_path}' for batch not found or invalid in '{prompts_dir}'. "
+                    f"A single prompt will be selected sequentially for the entire batch."
+                )
 
-    if request.prompt_path:
-        # User provided a specific prompt filename (relative to prompts directory)
-        potential_path = os.path.join(prompts_dir, request.prompt_path)
-        if os.path.isfile(potential_path) and potential_path.lower().endswith(('.wav', '.mp3')):
-            prompt_path_for_batch = potential_path
-            logger.info(f"Using user-provided prompt for batch: {prompt_path_for_batch}")
-        else:
-            logger.warning(
-                f"User-provided prompt path '{request.prompt_path}' for batch not found or invalid in '{prompts_dir}'. "
-                f"A single prompt will be selected sequentially for the entire batch."
-            )
-    
-    if not prompt_path_for_batch:
-        # No valid user prompt provided for the batch, or none provided at all, select one sequentially for the whole batch
-        prompt_path_for_batch = get_next_sequential_prompt_path()
         if not prompt_path_for_batch:
-            logger.error("No prompt audio files available for sequential selection for the batch, and none were provided or valid.")
+            # No valid user prompt provided for the batch, or none provided at all, select one sequentially for the whole batch
+            prompt_path_for_batch = get_next_sequential_prompt_path()
+            if not prompt_path_for_batch:
+                logger.error("No prompt audio files available for sequential selection for the batch, and none were provided or valid.")
+                raise HTTPException(
+                    status_code=400,
+                    detail="No prompt audio files found in the 'prompts' directory for batch processing, and none could be automatically selected."
+                )
+            logger.info(f"Sequentially selected prompt for the entire batch: {prompt_path_for_batch}")
+
+        # Validate output filenames
+        output_directory = request.output_directory
+        os.makedirs(output_directory, exist_ok=True)
+
+        # Validate that all filenames in speeches have .wav or .mp3 extension
+        invalid_filenames = [filename for filename in request.speeches.keys() if not filename.lower().endswith(('.wav', '.mp3'))]
+        if invalid_filenames:
             raise HTTPException(
-                status_code=400, 
-                detail="No prompt audio files found in the 'prompts' directory for batch processing, and none could be automatically selected."
+                status_code=400,
+                detail=f"All filenames must end with .wav or .mp3 extension. Invalid filenames: {', '.join(invalid_filenames)}"
             )
-        logger.info(f"Sequentially selected prompt for the entire batch: {prompt_path_for_batch}")
 
-    # Validate output filenames
-    output_directory = request.output_directory
-    os.makedirs(output_directory, exist_ok=True)
-
-    # Validate that all filenames in speeches have .wav or .mp3 extension
-    invalid_filenames = [filename for filename in request.speeches.keys() if not filename.lower().endswith(('.wav', '.mp3'))]
-    if invalid_filenames:
-        raise HTTPException(
-            status_code=400,
-            detail=f"All filenames must end with .wav or .mp3 extension. Invalid filenames: {', '.join(invalid_filenames)}"
+        # Create the batch task
+        task_id = task_manager.create_batch_task(
+            speeches=request.speeches,
+            prompt_path=prompt_path_for_batch,
+            output_directory=output_directory,
+            infer_mode=request.infer_mode
         )
 
-    # Create the batch task
-    task_id = task_manager.create_batch_task(
-        speeches=request.speeches,
-        prompt_path=prompt_path_for_batch,
-        output_directory=output_directory,
-        infer_mode=request.infer_mode
-    )
-
-    return {
-        "task_id": task_id, 
-        "status": TaskStatus.PENDING,
-        "total_files": len(request.speeches)
-    }
+        return {
+            "task_id": task_id,
+            "status": TaskStatus.PENDING,
+            "total_files": len(request.speeches)
+        }
 
 
 @router.get("/tasks/{task_id}", response_model=None)

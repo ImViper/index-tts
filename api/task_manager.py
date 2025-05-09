@@ -406,6 +406,7 @@ class TaskManager:
                     # Process the file based on inference mode
                     if task.infer_mode == "普通推理":
                         logger.info(f"Using regular inference for file {filename}")
+                        logger.info(f"DEBUG: Full text being passed to tts_model.infer for {filename}: '{text}'")
                         self.tts_model.infer(
                             audio_prompt=task.prompt_path,
                             text=text,

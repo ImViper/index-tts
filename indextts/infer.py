@@ -245,7 +245,11 @@ class IndexTTS:
 
         # text_tokens
         text_tokens_list = self.tokenizer.tokenize(text)
+        print(f"[DEBUG Cascade] IndexTTS.infer_fast - text_tokens_list for '{text}': {text_tokens_list}")
+
         sentences = self.tokenizer.split_sentences(text_tokens_list)
+        print(f"[DEBUG Cascade] IndexTTS.infer_fast - sentences for '{text}': {sentences}")
+
         if verbose:
             print("text token count:", len(text_tokens_list))
             print("sentences count:", len(sentences))
@@ -431,7 +435,11 @@ class IndexTTS:
 
         auto_conditioning = cond_mel
         text_tokens_list = self.tokenizer.tokenize(text)
+        print(f"[DEBUG Cascade] IndexTTS.infer - text_tokens_list for '{text}': {text_tokens_list}")
+
         sentences = self.tokenizer.split_sentences(text_tokens_list)
+        print(f"[DEBUG Cascade] IndexTTS.infer - sentences for '{text}': {sentences}")
+
         if verbose:
             print("text token count:", len(text_tokens_list))
             print("sentences count:", len(sentences))
