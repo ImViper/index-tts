@@ -29,14 +29,14 @@ Start the API server with:
 python api_server.py
 ```
 
-The server will run on `http://0.0.0.0:8000` by default.
+The server will run on `http://0.0.0.0:51046` by default.
 
 ## API Documentation
 
 Once the server is running, you can access the API documentation at:
 
-- Swagger UI: `http://localhost:8000/docs`
-- ReDoc: `http://localhost:8000/redoc`
+- Swagger UI: `http://localhost:51046/docs`
+- ReDoc: `http://localhost:51046/redoc`
 
 ## API Endpoints
 
